@@ -11,8 +11,19 @@
  * Optional RediSearch TEXT index for label lookup when the module is available.
  */
 
-import { getRedis, isRedisConfigured } from "@/lib/redis";
-import type { CommitState, PhysicalObject, SpatialMemoryHint } from "@/types/topo";
+import {
+  isRedisConfigured,
+  redisDel,
+  redisGeoAdd,
+  redisGeoSearch,
+  redisHGetAll,
+  redisHSet,
+  redisScanKeys,
+  redisSendCommand,
+  redisXAdd,
+  redisXLen,
+} from "@/lib/redis";
+import type { CommitState, SpatialMemoryHint } from "@/types/topo";
 
 const SEARCH_INDEX = "idx:topo-mem";
 const STREAM_MAX_LEN = 500;
@@ -42,8 +53,7 @@ async function ensureSearchIndex(): Promise<boolean> {
   if (!isRedisConfigured()) return false;
 
   try {
-    const redis = await getRedis();
-    await redis.sendCommand([
+    await redisSendCommand([
       "FT.CREATE",
       SEARCH_INDEX,
       "ON",
@@ -89,8 +99,7 @@ async function hashToHint(
   id: string,
   distance?: number,
 ): Promise<SpatialMemoryHint | null> {
-  const redis = await getRedis();
-  const data = await redis.hGetAll(objKey(branch, id));
+  const data = await redisHGetAll(objKey(branch, id));
   if (!data.id && !data.label) return null;
   return {
     id: data.id ?? id,
@@ -103,11 +112,6 @@ async function hashToHint(
   };
 }
 
-/**
- * Retrieve spatial context for the changed region — injected into Claude's prompt
- * so it can re-identify objects across lighting/angle changes without resending
- * full history.
- */
 export async function retrieveSpatialHints(
   branch: string,
   bbox: { x0: number; y0: number; x1: number; y1: number } | null,
@@ -118,20 +122,13 @@ export async function retrieveSpatialHints(
   if (!isRedisConfigured()) return [];
 
   try {
-    const redis = await getRedis();
     const hints: SpatialMemoryHint[] = [];
     const seen = new Set<string>();
 
     if (bbox) {
       const { x, y } = gridCenter(bbox, imageWidth, imageHeight);
-      // Grid coords map to GEO lon/lat — search ~3 grid units (~30% of scene)
       const radiusKm = 3 * 111;
-      const nearby = await redis.geoSearch(
-        geoKey(branch),
-        { longitude: x, latitude: y },
-        { radius: radiusKm, unit: "km" },
-        { SORT: "ASC", COUNT: { value: limit } },
-      );
+      const nearby = await redisGeoSearch(geoKey(branch), x, y, radiusKm, limit);
 
       for (const member of nearby) {
         if (seen.has(member)) continue;
@@ -141,10 +138,9 @@ export async function retrieveSpatialHints(
       }
     }
 
-    // Supplement with RediSearch label index if available
     if (hints.length < limit && (await ensureSearchIndex())) {
       try {
-        const res = (await redis.sendCommand([
+        const res = (await redisSendCommand([
           "FT.SEARCH",
           SEARCH_INDEX,
           `@branch:{${sanitizeBranch(branch)}}`,
@@ -153,7 +149,6 @@ export async function retrieveSpatialHints(
           String(limit),
         ])) as unknown[];
 
-        const count = res[0] as number;
         for (let i = 1; i + 1 < res.length && hints.length < limit; i += 2) {
           const fields = res[i + 1] as string[];
           const id = fields[fields.indexOf("id") + 1] ?? "";
@@ -168,7 +163,6 @@ export async function retrieveSpatialHints(
             lastCommit: fields[fields.indexOf("lastCommit") + 1] ?? "—",
           });
         }
-        void count;
       } catch {
         /* GEO results are enough */
       }
@@ -181,7 +175,6 @@ export async function retrieveSpatialHints(
   }
 }
 
-/** Format hints as a compact prompt block for Claude. */
 export function formatMemoryHints(hints: SpatialMemoryHint[]): string {
   if (hints.length === 0) return "";
   const lines = hints.map(
@@ -194,7 +187,6 @@ export function formatMemoryHints(hints: SpatialMemoryHint[]): string {
   );
 }
 
-/** Upsert object memories + GEO index after a successful commit. */
 export async function recordObjectMemories(
   branch: string,
   commit: CommitState,
@@ -202,17 +194,16 @@ export async function recordObjectMemories(
   if (!isRedisConfigured()) return;
 
   try {
-    const redis = await getRedis();
     await ensureSearchIndex();
 
     for (const obj of commit.objects) {
       const key = objKey(branch, obj.id);
-      const prev = await redis.hGetAll(key);
+      const prev = await redisHGetAll(key);
       const seenCount = prev.seenCount
         ? parseInt(prev.seenCount, 10) + 1
         : 1;
 
-      await redis.hSet(key, {
+      await redisHSet(key, {
         id: obj.id,
         label: obj.label,
         x: String(obj.x),
@@ -224,18 +215,13 @@ export async function recordObjectMemories(
         status: obj.status,
       });
 
-      await redis.geoAdd(geoKey(branch), {
-        longitude: obj.x,
-        latitude: obj.y,
-        member: obj.id,
-      });
+      await redisGeoAdd(geoKey(branch), obj.id, obj.x, obj.y);
     }
   } catch (err) {
     console.warn("[topo/memory] recordObjectMemories failed:", err);
   }
 }
 
-/** Append commit to the branch's Redis Stream (event-sourced reflog). */
 export async function appendCommitStream(
   branch: string,
   commit: CommitState,
@@ -244,10 +230,8 @@ export async function appendCommitStream(
   if (!isRedisConfigured()) return;
 
   try {
-    const redis = await getRedis();
-    await redis.xAdd(
+    await redisXAdd(
       streamKey(branch),
-      "*",
       {
         commit: commit.commitHash,
         ts: String(commit.timestamp),
@@ -256,26 +240,24 @@ export async function appendCommitStream(
         summary: diffSummary.slice(0, 256),
         skipped: commit.compression?.skipped ? "1" : "0",
       },
-      { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: STREAM_MAX_LEN } },
+      STREAM_MAX_LEN,
     );
   } catch (err) {
     console.warn("[topo/memory] appendCommitStream failed:", err);
   }
 }
 
-/** List all object memories for a branch (UI panel). */
 export async function listObjectMemories(
   branch: string,
 ): Promise<SpatialMemoryHint[]> {
   if (!isRedisConfigured()) return [];
 
   try {
-    const redis = await getRedis();
     const prefix = `topo:obj:${sanitizeBranch(branch)}:`;
+    const keys = await redisScanKeys(`${prefix}*`);
     const memories: SpatialMemoryHint[] = [];
 
-    for await (const rawKey of redis.scanIterator({ MATCH: `${prefix}*`, COUNT: 50 })) {
-      const key = Array.isArray(rawKey) ? rawKey[0]! : rawKey;
+    for (const key of keys) {
       const id = key.slice(prefix.length);
       const hint = await hashToHint(branch, id);
       if (hint) memories.push(hint);
@@ -295,10 +277,9 @@ export async function getMemoryStats(branch: string): Promise<{
   if (!isRedisConfigured()) return { objectCount: 0, streamLength: 0 };
 
   try {
-    const redis = await getRedis();
     const [objects, streamLen] = await Promise.all([
       listObjectMemories(branch),
-      redis.xLen(streamKey(branch)).catch(() => 0),
+      redisXLen(streamKey(branch)).catch(() => 0),
     ]);
     return { objectCount: objects.length, streamLength: streamLen };
   } catch {
@@ -306,21 +287,14 @@ export async function getMemoryStats(branch: string): Promise<{
   }
 }
 
-/** Clear spatial memory for a branch (on reset). */
 export async function clearSpatialMemory(branch: string): Promise<void> {
   if (!isRedisConfigured()) return;
 
   try {
-    const redis = await getRedis();
     const prefix = `topo:obj:${sanitizeBranch(branch)}:`;
-
-    for await (const rawKey of redis.scanIterator({ MATCH: `${prefix}*`, COUNT: 50 })) {
-      const key = Array.isArray(rawKey) ? rawKey[0]! : rawKey;
-      await redis.del(key);
-    }
-
-    await redis.del(geoKey(branch));
-    await redis.del(streamKey(branch));
+    const keys = await redisScanKeys(`${prefix}*`);
+    if (keys.length > 0) await redisDel(...keys);
+    await redisDel(geoKey(branch), streamKey(branch));
   } catch (err) {
     console.warn("[topo/memory] clearSpatialMemory failed:", err);
   }
@@ -330,18 +304,9 @@ export async function clearAllSpatialMemory(): Promise<void> {
   if (!isRedisConfigured()) return;
 
   try {
-    const redis = await getRedis();
-    for await (const rawKey of redis.scanIterator({ MATCH: "topo:obj:*", COUNT: 50 })) {
-      const key = Array.isArray(rawKey) ? rawKey[0]! : rawKey;
-      await redis.del(key);
-    }
-    for await (const rawKey of redis.scanIterator({ MATCH: "topo:geo:*", COUNT: 50 })) {
-      const key = Array.isArray(rawKey) ? rawKey[0]! : rawKey;
-      await redis.del(key);
-    }
-    for await (const rawKey of redis.scanIterator({ MATCH: "topo:stream:*", COUNT: 50 })) {
-      const key = Array.isArray(rawKey) ? rawKey[0]! : rawKey;
-      await redis.del(key);
+    for (const pattern of ["topo:obj:*", "topo:geo:*", "topo:stream:*"]) {
+      const keys = await redisScanKeys(pattern);
+      if (keys.length > 0) await redisDel(...keys);
     }
   } catch (err) {
     console.warn("[topo/memory] clearAllSpatialMemory failed:", err);

@@ -84,7 +84,7 @@ git push origin main
 In the Vercel project dashboard:
 
 1. **Storage / Marketplace → Redis** — link a Redis database to this project (Vercel injects `REDIS_URL`)
-2. **Storage → Blob** — link a Blob store (Vercel injects `BLOB_READ_WRITE_TOKEN`)
+2. **Storage → Blob** — link a Blob store (Vercel injects `BLOB_STORE_ID`; OIDC auth — no manual token needed)
 
 Redeploy after linking both. Topo auto-detects Vercel and uses Blob + Redis; you do **not** need `TOPO_USE_VERCEL_STORAGE=1` on Vercel.
 
@@ -100,7 +100,8 @@ In **Project → Settings → Environment Variables**, add:
 | `ANTHROPIC_API_KEY`       | Yes          | Claude API key                                                                                      |
 | `ANTHROPIC_MODEL`         | No           | Default: `claude-sonnet-4-20250514`                                                                 |
 | `TOPO_USE_VERCEL_STORAGE` | No on Vercel | Set to `1` only to test Blob/Redis **locally**. On Vercel, they are used automatically when linked. |
-| `BLOB_READ_WRITE_TOKEN`   | Yes (prod)   | From Vercel Blob (auto-injected when linked)                                                        |
+| `BLOB_STORE_ID`           | Yes (prod)   | From Vercel Blob (auto-injected when linked; OIDC — no `BLOB_READ_WRITE_TOKEN` required)            |
+| `BLOB_READ_WRITE_TOKEN`   | Local only   | Optional for local dev with `vercel env pull`; not needed on Vercel deploy                          |
 | `REDIS_URL`               | Yes (prod)   | From Vercel Redis integration (auto-injected when linked)                                           |
 | `SENTRY_DSN`              | No           | Error tracking                                                                                      |
 

@@ -2,6 +2,11 @@ import fs from "fs/promises";
 import path from "path";
 import { put } from "@vercel/blob";
 import { redisGetJson, redisSetJson } from "@/lib/redis";
+import {
+  hasRemoteStorage,
+  isVercelDeployment,
+  storageConfigError,
+} from "@/lib/storageEnv";
 import type { BranchData, CommitState, Issue, PullRequest, RepoStore } from "@/types/topo";
 
 const DATA_DIR = path.join(process.cwd(), ".topo-data");
@@ -10,48 +15,20 @@ const REPO_PATH = path.join(DATA_DIR, "repo.json");
 const LEGACY_LEDGER_PATH = path.join(DATA_DIR, "ledger.json");
 const KV_REPO_KEY = "topo:repo";
 
-function isVercelRuntime(): boolean {
-  return process.env.VERCEL === "1";
-}
-
-function hasRemoteStorageCreds(): boolean {
-  return !!(process.env.BLOB_READ_WRITE_TOKEN && process.env.REDIS_URL);
-}
-
-/**
- * Local dev: filesystem under .topo-data/ (default).
- * Vercel: Blob + Redis whenever credentials exist (linked Storage auto-injects env vars).
- * Local + TOPO_USE_VERCEL_STORAGE=1: opt-in to real Blob/Redis for integration testing.
- */
 function useRemoteBackend(): boolean {
-  if (process.env.TOPO_USE_VERCEL_STORAGE === "1") {
-    return hasRemoteStorageCreds();
-  }
-  if (isVercelRuntime()) {
-    return hasRemoteStorageCreds();
-  }
+  if (!hasRemoteStorage()) return false;
+  // Local dev: only use remote stores when explicitly opted in
+  if (process.env.TOPO_USE_VERCEL_STORAGE === "1") return true;
+  // Vercel deploy: REDIS_URL + BLOB_STORE_ID is enough (OIDC auth for Blob)
+  if (isVercelDeployment()) return true;
   return false;
 }
 
-function storageConfigError(): string {
-  const missing: string[] = [];
-  if (!process.env.BLOB_READ_WRITE_TOKEN) missing.push("BLOB_READ_WRITE_TOKEN");
-  if (!process.env.REDIS_URL) missing.push("REDIS_URL");
-  return (
-    "Topo cannot write to the server filesystem on Vercel. " +
-    "Link a Redis database and a Blob store to this project in the Vercel dashboard " +
-    "(Storage / Marketplace → Redis + Blob), then redeploy so " +
-    (missing.length > 0
-      ? `these env vars are set: ${missing.join(", ")}.`
-      : "BLOB_READ_WRITE_TOKEN and REDIS_URL are available.")
-  );
-}
-
-/** Throws on Vercel when Blob/KV are not configured — never mkdir .topo-data there. */
 function assertLocalFilesystemAllowed(): void {
-  if (isVercelRuntime()) {
-    throw new Error(storageConfigError());
-  }
+  if (!isVercelDeployment()) return;
+  // Safety net: creds present but mis-detected — still don't touch .topo-data
+  if (hasRemoteStorage()) return;
+  throw new Error(storageConfigError());
 }
 
 function emptyStore(): RepoStore {
