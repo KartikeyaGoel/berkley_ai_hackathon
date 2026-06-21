@@ -1,0 +1,18 @@
+{
+  "commits": [
+    {
+      "commitHash": "c1",
+      "objects": [
+        { "id": "obj-1", "label": "wrench" },
+        { "id": "obj-2", "label": "multimeter" }
+      ]
+    },
+    {
+      "commitHash": "c2",
+      "objects": [
+        { "id": "obj-1", "label": "wrench" },
+        { "id": "obj-2", "label": "multimeter" }
+      ]
+    }
+  ]
+}
