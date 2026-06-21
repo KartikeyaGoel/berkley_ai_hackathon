@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import {
+  Brain,
   Camera,
   GitCommitHorizontal,
   Layers,
@@ -40,7 +41,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import type { CommitState, CompressedLedger } from "@/types/topo";
+import type { CommitState, CompressedLedger, SpatialMemoryHint } from "@/types/topo";
 import type { TokenMetrics } from "@/utils/metrics";
 
 const DiffViewer = dynamic(() => import("@/components/DiffViewer"), {
@@ -93,6 +94,21 @@ interface CommitResponse {
   metrics: TokenMetrics;
   diffSummary: string;
   branch: string;
+  spatialMemory?: {
+    objectCount: number;
+    streamLength: number;
+    hintsUsedLastCommit: number;
+  };
+}
+
+interface MemoryResponse {
+  enabled: boolean;
+  objects: SpatialMemoryHint[];
+  stats: {
+    objectCount: number;
+    streamLength: number;
+    hintsUsedLastCommit: number;
+  };
 }
 
 interface HistoryResponse {
@@ -115,6 +131,11 @@ export function WorkspacePanel({
   const [history, setHistory] = useState<CommitState[]>([]);
   const [metrics, setMetrics] = useState<TokenMetrics | null>(null);
   const [log, setLog] = useState<string[]>([]);
+  const [memoryObjects, setMemoryObjects] = useState<SpatialMemoryHint[]>([]);
+  const [memoryStats, setMemoryStats] = useState<MemoryResponse["stats"] | null>(
+    null,
+  );
+  const [memoryEnabled, setMemoryEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +147,20 @@ export function WorkspacePanel({
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
+  const loadMemory = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/memory?branch=${encodeURIComponent(branch)}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as MemoryResponse;
+      setMemoryEnabled(data.enabled);
+      setMemoryObjects(data.objects);
+      setMemoryStats(data.stats);
+    } catch {
+      setMemoryObjects([]);
+      setMemoryStats(null);
+    }
+  }, [branch]);
+
   const loadHistory = useCallback(async () => {
     setHydrating(true);
     try {
@@ -135,7 +170,7 @@ export function WorkspacePanel({
       setHistory(data.history);
       setMetrics(data.metrics);
       setLog(data.log);
-      await onBranchesLoaded();
+      await Promise.all([onBranchesLoaded(), loadMemory()]);
     } catch {
       setHistory([]);
       setMetrics(null);
@@ -143,7 +178,7 @@ export function WorkspacePanel({
     } finally {
       setHydrating(false);
     }
-  }, [branch, onBranchesLoaded]);
+  }, [branch, onBranchesLoaded, loadMemory]);
 
   useEffect(() => {
     void loadHistory();
@@ -181,6 +216,14 @@ export function WorkspacePanel({
         const data = (await res.json()) as CommitResponse;
         setHistory(data.history);
         setMetrics(data.metrics);
+        if (data.spatialMemory) {
+          setMemoryStats({
+            objectCount: data.spatialMemory.objectCount,
+            streamLength: data.spatialMemory.streamLength,
+            hintsUsedLastCommit: data.spatialMemory.hintsUsedLastCommit,
+          });
+        }
+        await loadMemory();
         const msg = commitMessage.trim();
         setLog((prev) => [
           ...prev,
@@ -196,7 +239,7 @@ export function WorkspacePanel({
         setLoading(false);
       }
     },
-    [branch, commitMessage, forceFull, onRefresh],
+    [branch, commitMessage, forceFull, loadMemory, onRefresh],
   );
 
   const onFileSelected = useCallback(
@@ -220,6 +263,8 @@ export function WorkspacePanel({
       setHistory([]);
       setMetrics(null);
       setLog([]);
+      setMemoryObjects([]);
+      setMemoryStats(null);
       setCommitMessage("");
       await onRefresh();
     } catch (err) {
@@ -564,6 +609,60 @@ export function WorkspacePanel({
               ) : (
                 <p className="text-sm text-muted-foreground">
                   Commit a snapshot to see per-layer savings.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Brain className="size-4 text-chart-3" />
+                  <CardTitle className="text-base">Spatial memory</CardTitle>
+                </div>
+                {memoryEnabled && memoryStats && (
+                  <Badge variant="outline" className="font-mono text-xs">
+                    {memoryStats.objectCount} objs · stream {memoryStats.streamLength}
+                  </Badge>
+                )}
+              </div>
+              <CardDescription>
+                Redis GEO + Streams — agent context retrieval
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!memoryEnabled ? (
+                <p className="text-sm text-muted-foreground">
+                  Link Redis on Vercel to enable spatial object memory.
+                </p>
+              ) : memoryObjects.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Commit a snapshot — object memories appear here.
+                </p>
+              ) : (
+                <ScrollArea className="h-[160px] rounded-lg border bg-muted/30">
+                  <div className="space-y-1.5 p-3">
+                    {memoryObjects.map((obj) => (
+                      <div
+                        key={obj.id}
+                        className="flex items-center justify-between gap-2 text-xs"
+                      >
+                        <span className="topo-terminal truncate text-foreground/90">
+                          {obj.id} · {obj.label}
+                        </span>
+                        <span className="shrink-0 font-mono text-muted-foreground">
+                          {obj.seenCount}× @ {obj.x.toFixed(1)},{obj.y.toFixed(1)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+              {memoryStats != null && memoryStats.hintsUsedLastCommit > 0 && (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Last commit injected {memoryStats.hintsUsedLastCommit} Redis memory
+                  hint{memoryStats.hintsUsedLastCommit === 1 ? "" : "s"} into Claude.
                 </p>
               )}
             </CardContent>

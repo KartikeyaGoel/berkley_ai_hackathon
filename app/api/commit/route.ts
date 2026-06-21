@@ -2,6 +2,13 @@ import * as Sentry from "@sentry/nextjs";
 import { NextRequest, NextResponse } from "next/server";
 import { reconcileCommit } from "@/lib/topoVision";
 import {
+  appendCommitStream,
+  formatMemoryHints,
+  getMemoryStats,
+  recordObjectMemories,
+  retrieveSpatialHints,
+} from "@/lib/spatialMemory";
+import {
   appendCommit,
   getCurrentBranch,
   getHistory,
@@ -58,8 +65,9 @@ export async function POST(request: NextRequest) {
 
       const commitHash = nextCommitHash(history);
       let commit: CommitState;
+      let memoryHintsUsed = 0;
 
-      // Naive baselines shared by every branch: a no-compression client would
+      // Naive baselines shared by every branch:
       // resend the whole frame + the entire prior-state JSON on every commit.
       const fullImageTokens = estimateImageTokens(
         diffResult.imageWidth,
@@ -107,17 +115,28 @@ export async function POST(request: NextRequest) {
 
         const croppedBase64 = imageToSend.toString("base64");
 
+        const spatialHints = await retrieveSpatialHints(
+          branch,
+          forceFull ? null : diffResult.bbox,
+          diffResult.imageWidth,
+          diffResult.imageHeight,
+        );
+        memoryHintsUsed = spatialHints.length;
+        const spatialMemoryBlock = formatMemoryHints(spatialHints);
+
         const reconcileResult = await Sentry.startSpan(
           { name: "reconcile-commit", op: "gen_ai.chat" },
           async (span) => {
             span.setAttribute("gen_ai.system", "anthropic");
             span.setAttribute("gen_ai.operation.name", "chat");
+            span.setAttribute("topo.memory.hints", memoryHintsUsed);
             const r = await reconcileCommit(
               croppedBase64,
               priorObjects,
               forceFull ? null : diffResult.bbox,
               diffResult.imageWidth,
               diffResult.imageHeight,
+              spatialMemoryBlock,
             );
             span.setAttribute("gen_ai.usage.input_tokens", r.usage.input_tokens);
             span.setAttribute("gen_ai.usage.output_tokens", r.usage.output_tokens);
@@ -212,6 +231,11 @@ export async function POST(request: NextRequest) {
       const metrics = buildTokenMetrics(updatedHistory, croppedTokens, fullTokens);
       const diffSummary = formatCommitDiff(commit, prevCommit);
 
+      // Redis spatial agent memory — record after persist
+      await recordObjectMemories(branch, commit);
+      await appendCommitStream(branch, commit, diffSummary);
+      const spatialMemory = await getMemoryStats(branch);
+
       // ── Sentry: AI-pipeline observability ──────────────────────────────
       // Surface compression + token measurements on the commit transaction so
       // every commit's savings are queryable/alertable in Sentry, not just logs.
@@ -235,6 +259,11 @@ export async function POST(request: NextRequest) {
         stateInView: breakdown?.state.inViewObjects,
         stateOmitted: breakdown?.state.omittedObjects,
         approxTokensSaved: breakdown?.approxTokensSaved,
+      });
+      scope.setContext("topo.spatial_memory", {
+        hintsUsed: memoryHintsUsed,
+        objectCount: spatialMemory.objectCount,
+        streamLength: spatialMemory.streamLength,
       });
       scope.setTag("topo.skipped", String(breakdown?.skipped ?? false));
 
@@ -266,6 +295,10 @@ export async function POST(request: NextRequest) {
         compressed,
         metrics,
         diffSummary,
+        spatialMemory: {
+          ...spatialMemory,
+          hintsUsedLastCommit: memoryHintsUsed,
+        },
         debug: {
           changed: diffResult.changed,
           bbox: diffResult.bbox,

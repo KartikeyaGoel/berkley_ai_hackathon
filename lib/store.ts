@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { put } from "@vercel/blob";
-import { kv } from "@vercel/kv";
+import { redisGetJson, redisSetJson } from "@/lib/redis";
 import type { BranchData, CommitState, Issue, PullRequest, RepoStore } from "@/types/topo";
 
 const DATA_DIR = path.join(process.cwd(), ".topo-data");
@@ -10,13 +10,48 @@ const REPO_PATH = path.join(DATA_DIR, "repo.json");
 const LEGACY_LEDGER_PATH = path.join(DATA_DIR, "ledger.json");
 const KV_REPO_KEY = "topo:repo";
 
-function useVercelBackend(): boolean {
-  if (process.env.TOPO_USE_VERCEL_STORAGE !== "1") return false;
-  return !!(
-    process.env.BLOB_READ_WRITE_TOKEN &&
-    process.env.KV_REST_API_URL &&
-    process.env.KV_REST_API_TOKEN
+function isVercelRuntime(): boolean {
+  return process.env.VERCEL === "1";
+}
+
+function hasRemoteStorageCreds(): boolean {
+  return !!(process.env.BLOB_READ_WRITE_TOKEN && process.env.REDIS_URL);
+}
+
+/**
+ * Local dev: filesystem under .topo-data/ (default).
+ * Vercel: Blob + Redis whenever credentials exist (linked Storage auto-injects env vars).
+ * Local + TOPO_USE_VERCEL_STORAGE=1: opt-in to real Blob/Redis for integration testing.
+ */
+function useRemoteBackend(): boolean {
+  if (process.env.TOPO_USE_VERCEL_STORAGE === "1") {
+    return hasRemoteStorageCreds();
+  }
+  if (isVercelRuntime()) {
+    return hasRemoteStorageCreds();
+  }
+  return false;
+}
+
+function storageConfigError(): string {
+  const missing: string[] = [];
+  if (!process.env.BLOB_READ_WRITE_TOKEN) missing.push("BLOB_READ_WRITE_TOKEN");
+  if (!process.env.REDIS_URL) missing.push("REDIS_URL");
+  return (
+    "Topo cannot write to the server filesystem on Vercel. " +
+    "Link a Redis database and a Blob store to this project in the Vercel dashboard " +
+    "(Storage / Marketplace → Redis + Blob), then redeploy so " +
+    (missing.length > 0
+      ? `these env vars are set: ${missing.join(", ")}.`
+      : "BLOB_READ_WRITE_TOKEN and REDIS_URL are available.")
   );
+}
+
+/** Throws on Vercel when Blob/KV are not configured — never mkdir .topo-data there. */
+function assertLocalFilesystemAllowed(): void {
+  if (isVercelRuntime()) {
+    throw new Error(storageConfigError());
+  }
 }
 
 function emptyStore(): RepoStore {
@@ -67,26 +102,20 @@ async function writeLocalRepo(store: RepoStore): Promise<void> {
 }
 
 export async function getRepoStore(): Promise<RepoStore> {
-  if (useVercelBackend()) {
-    try {
-      const store = await kv.get<RepoStore>(KV_REPO_KEY);
-      return store ?? emptyStore();
-    } catch {
-      return emptyStore();
-    }
+  if (useRemoteBackend()) {
+    const store = await redisGetJson<RepoStore>(KV_REPO_KEY);
+    return store ?? emptyStore();
   }
+  assertLocalFilesystemAllowed();
   return readLocalRepo();
 }
 
 async function saveRepoStore(store: RepoStore): Promise<void> {
-  if (useVercelBackend()) {
-    try {
-      await kv.set(KV_REPO_KEY, store);
-      return;
-    } catch (err) {
-      console.warn("[topo/store] KV save failed, falling back to local:", err);
-    }
+  if (useRemoteBackend()) {
+    await redisSetJson(KV_REPO_KEY, store);
+    return;
   }
+  assertLocalFilesystemAllowed();
   await writeLocalRepo(store);
 }
 
@@ -138,7 +167,7 @@ export async function createBranch(
       forkedFrom: sourceName,
       createdAt: Date.now(),
     };
-    if (!useVercelBackend()) {
+    if (!useRemoteBackend()) {
       try {
         await ensureLocalDirs();
         await fs.copyFile(photoPath(sourceName), photoPath(trimmed));
@@ -169,18 +198,15 @@ export async function getPrevPhoto(branch?: string): Promise<Buffer | null> {
   const store = await getRepoStore();
   const b = branch ?? store.currentBranch;
 
-  if (useVercelBackend()) {
-    try {
-      const url = await kv.get<string>(`topo:photo:${sanitizeBranch(b)}`);
-      if (!url) return null;
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      return Buffer.from(await res.arrayBuffer());
-    } catch {
-      return null;
-    }
+  if (useRemoteBackend()) {
+    const url = await redisGetJson<string>(`topo:photo:${sanitizeBranch(b)}`);
+    if (!url) return null;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
   }
 
+  assertLocalFilesystemAllowed();
   try {
     return await fs.readFile(photoPath(b));
   } catch {
@@ -192,19 +218,16 @@ export async function putPhoto(buffer: Buffer, branch?: string): Promise<void> {
   const store = await getRepoStore();
   const b = branch ?? store.currentBranch;
 
-  if (useVercelBackend()) {
-    try {
-      const blob = await put(`topo/photo-${sanitizeBranch(b)}-${Date.now()}.jpg`, buffer, {
-        access: "public",
-        contentType: "image/jpeg",
-      });
-      await kv.set(`topo:photo:${sanitizeBranch(b)}`, blob.url);
-      return;
-    } catch (err) {
-      console.warn("[topo/store] Blob failed, falling back to local:", err);
-    }
+  if (useRemoteBackend()) {
+    const blob = await put(`topo/photo-${sanitizeBranch(b)}-${Date.now()}.jpg`, buffer, {
+      access: "public",
+      contentType: "image/jpeg",
+    });
+    await redisSetJson(`topo:photo:${sanitizeBranch(b)}`, blob.url);
+    return;
   }
 
+  assertLocalFilesystemAllowed();
   await ensureLocalDirs();
   await fs.writeFile(photoPath(b), buffer);
 }
@@ -235,7 +258,7 @@ export async function clearBranch(branch?: string): Promise<void> {
   }
   await saveRepoStore(store);
 
-  if (!useVercelBackend()) {
+  if (!useRemoteBackend()) {
     try {
       await fs.unlink(photoPath(b));
     } catch {
@@ -247,7 +270,7 @@ export async function clearBranch(branch?: string): Promise<void> {
 export async function clearStore(): Promise<void> {
   const store = emptyStore();
   await saveRepoStore(store);
-  if (!useVercelBackend()) {
+  if (!useRemoteBackend()) {
     try {
       await fs.rm(PHOTOS_DIR, { recursive: true, force: true });
     } catch {

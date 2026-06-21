@@ -83,6 +83,23 @@ export interface PullRequest {
   createdAt: number;
 }
 
+export interface SpatialMemoryHint {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  seenCount: number;
+  lastCommit: string;
+  /** Distance in grid units from query point (GEO search). */
+  distance?: number;
+}
+
+export interface SpatialMemoryStats {
+  objectCount: number;
+  streamLength: number;
+  hintsUsedLastCommit: number;
+}
+
 export interface RepoStore {
   currentBranch: string;
   branches: Record<string, BranchData>;

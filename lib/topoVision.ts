@@ -52,6 +52,7 @@ export async function reconcileCommit(
   bbox: { x0: number; y0: number; x1: number; y1: number } | null,
   imageWidth = 0,
   imageHeight = 0,
+  spatialMemory = "",
 ): Promise<ReconcileResult> {
   const model = process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
 
@@ -64,15 +65,18 @@ export async function reconcileCommit(
     imageHeight,
   );
 
+  const memoryBlock = spatialMemory ? `\n${spatialMemory}\n` : "";
+
   const userText = bbox
     ? `This image is a CROPPED REGION of the full scene (only the area that changed
        since the last commit, sent to save tokens). Region bounds in original frame:
        ${JSON.stringify(bbox)}.
-       ${statePrompt.prompt}
+       ${statePrompt.prompt}${memoryBlock}
        Report ONLY objects visible in THIS crop (updated positions for "changed-region"
        ids, plus any genuinely new objects). The "keep-unchanged" ids are handled
-       outside this call — do NOT output them and do NOT invent coordinates for them.`
-    : `This is the first commit / full frame.\n${statePrompt.prompt}`;
+       outside this call — do NOT output them and do NOT invent coordinates for them.
+       Use SPATIAL MEMORY hints to match returning objects to stable ids when plausible.`
+    : `This is the first commit / full frame.\n${statePrompt.prompt}${memoryBlock}`;
 
   const response = await anthropic.messages.create({
     model,
