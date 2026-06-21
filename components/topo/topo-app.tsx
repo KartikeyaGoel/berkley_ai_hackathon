@@ -110,9 +110,9 @@ export function TopoApp() {
   const currentBranchInfo = branches.find((b) => b.name === currentBranch);
 
   return (
-    <main className="topo-shell-bg min-h-screen">
+    <main className="topo-shell-bg min-h-screen overflow-x-hidden">
       <header className="border-b border-border/80 bg-card/95 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6 md:flex-row md:items-center md:justify-between">
+        <div className="mx-auto flex min-w-0 max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <Layers className="size-5" />
@@ -125,28 +125,31 @@ export function TopoApp() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <ThemeToggle />
-            <Select
-              value={currentBranch}
-              onValueChange={(v) => {
-                if (v) void switchBranch(v);
-              }}
-            >
-              <SelectTrigger className="w-full min-w-0 gap-2 font-mono text-xs sm:w-fit sm:min-w-[140px]">
-                <GitBranch className="size-3.5 text-primary" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {branches.map((b) => (
-                  <SelectItem key={b.name} value={b.name}>
-                    {b.name} ({b.commits})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="flex min-w-0 items-center gap-2">
+              <ThemeToggle />
+              <Select
+                value={currentBranch}
+                onValueChange={(v) => {
+                  if (v) void switchBranch(v);
+                }}
+              >
+                <SelectTrigger className="min-w-0 flex-1 gap-2 font-mono text-xs sm:w-fit sm:min-w-[140px] sm:flex-none">
+                  <GitBranch className="size-3.5 shrink-0 text-primary" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {branches.map((b) => (
+                    <SelectItem key={b.name} value={b.name}>
+                      {b.name} ({b.commits})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-            <Dialog open={branchDialogOpen} onOpenChange={setBranchDialogOpen}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Dialog open={branchDialogOpen} onOpenChange={setBranchDialogOpen}>
               <DialogTrigger
                 render={
                   <Button variant="outline" size="sm" className="gap-1.5" />
@@ -219,11 +222,12 @@ export function TopoApp() {
             <Badge variant="secondary" className="font-mono text-xs">
               {currentBranchInfo?.commits ?? 0} commits
             </Badge>
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+      <div className="mx-auto min-w-0 max-w-6xl px-4 sm:px-6">
         <Tabs defaultValue="workspace">
           <TabsList
             variant="line"

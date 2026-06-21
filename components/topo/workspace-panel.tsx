@@ -279,7 +279,7 @@ export function WorkspacePanel({
   const head = current?.commitHash ?? "—";
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline" className="font-mono text-xs">
           HEAD {head}
@@ -289,7 +289,7 @@ export function WorkspacePanel({
         </Badge>
       </div>
 
-      <Card className="shadow-sm">
+      <Card className="min-w-0 shadow-sm">
         <CardHeader className="pb-3">
           <div className="flex items-center gap-2">
             <GitCommitHorizontal className="size-4 text-primary" />
@@ -418,8 +418,8 @@ export function WorkspacePanel({
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-5">
-        <Card className="overflow-hidden shadow-sm lg:col-span-3">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-5">
+        <Card className="min-w-0 overflow-hidden shadow-sm lg:col-span-3">
           <CardHeader className="border-b pb-3">
             <CardTitle className="text-base">Spatial diff</CardTitle>
             <CardDescription>Changes vs. previous commit</CardDescription>
@@ -435,8 +435,8 @@ export function WorkspacePanel({
           </CardContent>
         </Card>
 
-        <div className="flex flex-col gap-6 lg:col-span-2">
-          <Card className="shadow-sm">
+        <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
+          <Card className="min-w-0 shadow-sm">
             <CardHeader className="pb-2">
               <div className="flex items-center gap-2">
                 <Terminal className="size-4 text-primary" />
@@ -472,7 +472,7 @@ export function WorkspacePanel({
             </CardContent>
           </Card>
 
-          <Card className="shadow-sm">
+          <Card className="min-w-0 shadow-sm">
             <CardHeader className="pb-2">
               <div className="flex items-center gap-2">
                 <Zap className="size-4 text-chart-2" />
@@ -533,7 +533,7 @@ export function WorkspacePanel({
             )}
           </Card>
 
-          <Card className="shadow-sm">
+          <Card className="min-w-0 shadow-sm">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -614,7 +614,7 @@ export function WorkspacePanel({
             </CardContent>
           </Card>
 
-          <Card className="shadow-sm">
+          <Card className="min-w-0 shadow-sm">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">

@@ -107,10 +107,10 @@ export default function DiffViewer({
 }) {
   return (
     <div
-      className="w-full overflow-hidden rounded-xl ring-1 ring-border/60 bg-background/40"
+      className="min-w-0 w-full max-w-full overflow-hidden rounded-xl ring-1 ring-border/60 bg-background/40"
       style={{ height: 360 }}
     >
-      <div className="relative overflow-hidden" style={{ height: 320 }}>
+      <div className="relative min-w-0 overflow-hidden" style={{ height: 320 }}>
         <Canvas
           camera={{ position: [8, 8, 8], fov: 50 }}
           gl={{ antialias: true }}
