@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "wipe": "node scripts/wipe-storage.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

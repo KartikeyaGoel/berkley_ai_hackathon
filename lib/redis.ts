@@ -177,7 +177,10 @@ export async function redisDel(...keys: string[]): Promise<void> {
   if (keys.length === 0) return;
   if (backend() === "tcp") {
     const c = await getTcpClient();
-    await c.del(keys);
+    // Delete one key at a time — Redis Cluster rejects multi-key DEL across slots.
+    for (const key of keys) {
+      await c.del(key);
+    }
     return;
   }
   await getUpstashClient().del(...keys);

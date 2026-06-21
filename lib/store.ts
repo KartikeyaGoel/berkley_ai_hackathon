@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
-import { get, put } from "@vercel/blob";
-import { redisGetJson, redisSetJson } from "@/lib/redis";
+import { del, get, list, put } from "@vercel/blob";
+import { redisDel, redisGetJson, redisScanKeys, redisSetJson } from "@/lib/redis";
 import {
   hasRemoteStorage,
   isVercelDeployment,
@@ -235,13 +235,42 @@ export async function clearBranch(branch?: string): Promise<void> {
   }
   await saveRepoStore(store);
 
-  if (!useRemoteBackend()) {
-    try {
-      await fs.unlink(photoPath(b));
-    } catch {
-      /* no photo */
-    }
+  if (useRemoteBackend()) {
+    await redisDel(`topo:photo:${sanitizeBranch(b)}`);
+    return;
   }
+
+  try {
+    await fs.unlink(photoPath(b));
+  } catch {
+    /* no photo */
+  }
+}
+
+/** Delete all Topo blobs + Redis keys (remote backend only). */
+export async function wipeRemoteStorage(): Promise<{
+  redisKeysDeleted: number;
+  blobsDeleted: number;
+}> {
+  if (!useRemoteBackend()) {
+    return { redisKeysDeleted: 0, blobsDeleted: 0 };
+  }
+
+  const keys = await redisScanKeys("topo:*");
+  if (keys.length > 0) await redisDel(...keys);
+
+  let blobsDeleted = 0;
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix: "topo/", cursor });
+    for (const blob of page.blobs) {
+      await del(blob.url);
+      blobsDeleted++;
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+
+  return { redisKeysDeleted: keys.length, blobsDeleted };
 }
 
 export async function clearStore(): Promise<void> {

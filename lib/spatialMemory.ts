@@ -304,10 +304,8 @@ export async function clearAllSpatialMemory(): Promise<void> {
   if (!isRedisConfigured()) return;
 
   try {
-    for (const pattern of ["topo:obj:*", "topo:geo:*", "topo:stream:*"]) {
-      const keys = await redisScanKeys(pattern);
-      if (keys.length > 0) await redisDel(...keys);
-    }
+    const keys = await redisScanKeys("topo:*");
+    if (keys.length > 0) await redisDel(...keys);
   } catch (err) {
     console.warn("[topo/memory] clearAllSpatialMemory failed:", err);
   }
