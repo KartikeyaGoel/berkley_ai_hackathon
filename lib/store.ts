@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { put } from "@vercel/blob";
+import { get, put } from "@vercel/blob";
 import { redisGetJson, redisSetJson } from "@/lib/redis";
 import {
   hasRemoteStorage,
@@ -178,9 +178,9 @@ export async function getPrevPhoto(branch?: string): Promise<Buffer | null> {
   if (useRemoteBackend()) {
     const url = await redisGetJson<string>(`topo:photo:${sanitizeBranch(b)}`);
     if (!url) return null;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    const result = await get(url, { access: "private" });
+    if (!result || result.statusCode !== 200 || !result.stream) return null;
+    return Buffer.from(await new Response(result.stream).arrayBuffer());
   }
 
   assertLocalFilesystemAllowed();
@@ -197,7 +197,7 @@ export async function putPhoto(buffer: Buffer, branch?: string): Promise<void> {
 
   if (useRemoteBackend()) {
     const blob = await put(`topo/photo-${sanitizeBranch(b)}-${Date.now()}.jpg`, buffer, {
-      access: "public",
+      access: "private",
       contentType: "image/jpeg",
     });
     await redisSetJson(`topo:photo:${sanitizeBranch(b)}`, blob.url);
